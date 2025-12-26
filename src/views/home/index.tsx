@@ -339,6 +339,12 @@ const GameSandbox: FC = () => {
       const dy = stickY - centerY;
       const distance = Math.sqrt(dx * dx + dy * dy);
       
+      // Minimum threshold to register movement (prevents accidental touches)
+      const minThreshold = 15; // pixels
+      if (distance < minThreshold) {
+        return { x: 0, y: 0 };
+      }
+      
       // Normalize to radius
       const normalizedX = distance > 0 ? dx / distance : 0;
       const normalizedY = distance > 0 ? dy / distance : 0;
@@ -392,6 +398,8 @@ const GameSandbox: FC = () => {
         centerY,
         radius
       );
+      
+      // Update direction immediately (this is critical for game control)
       handleDirectionChange(direction);
       
       // Update joystick stick position (clamped to radius)
@@ -423,18 +431,19 @@ const GameSandbox: FC = () => {
       if (!gameReady || gameOver || won) return;
       const touch = e.touches[0];
       if (touch) {
-        // Only prevent default when we're actually using the joystick
+        // Prevent default to stop scrolling
         e.preventDefault();
-        e.stopPropagation();
         handleJoystickStart(touch.clientX, touch.clientY);
       }
     };
 
     const handleTouchMove = (e: TouchEvent) => {
-      if (!joystickActive) return;
-      // Always prevent default to stop scrolling
+      if (!joystickActive) {
+        // Don't prevent default if joystick isn't active
+        return;
+      }
+      // Prevent scrolling only when joystick is active
       e.preventDefault();
-      e.stopPropagation();
       const touch = e.touches[0];
       if (touch) {
         handleJoystickMove(touch.clientX, touch.clientY);
@@ -442,28 +451,30 @@ const GameSandbox: FC = () => {
     };
 
     const handleTouchEnd = (e: TouchEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      handleJoystickEnd();
+      if (joystickActive) {
+        e.preventDefault();
+        handleJoystickEnd();
+      }
     };
 
     const handleTouchCancel = (e: TouchEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      handleJoystickEnd();
+      if (joystickActive) {
+        e.preventDefault();
+        handleJoystickEnd();
+      }
     };
 
-    // Use capture phase and passive: false to prevent scrolling
-    document.addEventListener('touchstart', handleTouchStart, { passive: false, capture: true });
-    document.addEventListener('touchmove', handleTouchMove, { passive: false, capture: true });
-    document.addEventListener('touchend', handleTouchEnd, { passive: false, capture: true });
-    document.addEventListener('touchcancel', handleTouchCancel, { passive: false, capture: true });
+    // Use passive: false to allow preventDefault, but don't use capture
+    window.addEventListener('touchstart', handleTouchStart, { passive: false });
+    window.addEventListener('touchmove', handleTouchMove, { passive: false });
+    window.addEventListener('touchend', handleTouchEnd, { passive: false });
+    window.addEventListener('touchcancel', handleTouchCancel, { passive: false });
 
     return () => {
-      document.removeEventListener('touchstart', handleTouchStart, { capture: true } as EventListenerOptions);
-      document.removeEventListener('touchmove', handleTouchMove, { capture: true } as EventListenerOptions);
-      document.removeEventListener('touchend', handleTouchEnd, { capture: true } as EventListenerOptions);
-      document.removeEventListener('touchcancel', handleTouchCancel, { capture: true } as EventListenerOptions);
+      window.removeEventListener('touchstart', handleTouchStart);
+      window.removeEventListener('touchmove', handleTouchMove);
+      window.removeEventListener('touchend', handleTouchEnd);
+      window.removeEventListener('touchcancel', handleTouchCancel);
     };
   }, [isTouchDevice, gameReady, gameOver, won, joystickActive, handleJoystickStart, handleJoystickMove, handleJoystickEnd]);
 
@@ -803,31 +814,19 @@ const GameSandbox: FC = () => {
   };
   const pacEmoji = mouth.current ? emojiMap[`${dir.x},${dir.y}`] || "🟡" : "🌕";
 
-  // Prevent body scroll when joystick is active
+  // Prevent body scroll when joystick is active (simpler approach)
   useEffect(() => {
     if (!isTouchDevice) return;
     
     if (joystickActive) {
-      // Prevent scrolling
+      // Prevent scrolling with CSS
+      const originalOverflow = document.body.style.overflow;
       document.body.style.overflow = 'hidden';
-      document.body.style.position = 'fixed';
-      document.body.style.width = '100%';
-      document.body.style.height = '100%';
-    } else {
-      // Restore scrolling
-      document.body.style.overflow = '';
-      document.body.style.position = '';
-      document.body.style.width = '';
-      document.body.style.height = '';
+      
+      return () => {
+        document.body.style.overflow = originalOverflow;
+      };
     }
-    
-    return () => {
-      // Cleanup on unmount
-      document.body.style.overflow = '';
-      document.body.style.position = '';
-      document.body.style.width = '';
-      document.body.style.height = '';
-    };
   }, [isTouchDevice, joystickActive]);
 
   return (
