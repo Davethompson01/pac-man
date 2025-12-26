@@ -214,7 +214,7 @@ const GameSandbox: FC = () => {
     {
       id: "pinky",
       pos: GHOST_INITIAL_POSITIONS.pinky,
-      color: "🟠",
+      color: "🩷", // Pink
       initialPos: GHOST_INITIAL_POSITIONS.pinky,
       initialDir: { x: 0, y: -1 },
       mode: "scatter",
@@ -222,7 +222,7 @@ const GameSandbox: FC = () => {
     {
       id: "inky",
       pos: GHOST_INITIAL_POSITIONS.inky,
-      color: "🔵",
+      color: "💙", // Cyan/Blue
       initialPos: GHOST_INITIAL_POSITIONS.inky,
       initialDir: { x: 1, y: 0 },
       mode: "scatter",
@@ -230,7 +230,7 @@ const GameSandbox: FC = () => {
     {
       id: "clyde",
       pos: GHOST_INITIAL_POSITIONS.clyde,
-      color: "🟡",
+      color: "🟠", // Orange
       initialPos: GHOST_INITIAL_POSITIONS.clyde,
       initialDir: { x: 1, y: 0 },
       mode: "scatter",
@@ -242,6 +242,13 @@ const GameSandbox: FC = () => {
 
   // Touch device detection
   const [isTouchDevice, setIsTouchDevice] = useState(false);
+
+  // Joystick state
+  const [joystickActive, setJoystickActive] = useState(false);
+  const [joystickPosition, setJoystickPosition] = useState({ x: 0, y: 0 });
+  const joystickBaseRef = useRef<HTMLDivElement>(null);
+  const joystickStickRef = useRef<HTMLDivElement>(null);
+  const joystickCenterRef = useRef<{ x: number; y: number; radius: number } | null>(null);
 
   useEffect(() => {
     // Detect touch devices
@@ -272,13 +279,19 @@ const GameSandbox: FC = () => {
 
       let bestMove: Dir | null = null;
       let bestDist = g.mode === "frightened" ? -Infinity : Infinity;
+      
+      // Only prevent reverse if we have a valid last direction (not stationary)
+      const preventReverse = lastDir.x !== 0 || lastDir.y !== 0;
 
+      // First pass: find best move avoiding reverse
       for (const move of moves) {
-        if (move.x === -lastDir.x && move.y === -lastDir.y) continue;
+        if (preventReverse && move.x === -lastDir.x && move.y === -lastDir.y) continue;
 
         const nx = g.pos.x + move.x;
         const ny = g.pos.y + move.y;
 
+        // Bounds checking
+        if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS) continue;
         if (isWall(nx, ny)) continue;
 
         const newPos: Pos = { x: nx, y: ny };
@@ -287,6 +300,21 @@ const GameSandbox: FC = () => {
         if (g.mode === "frightened" ? d > bestDist : d < bestDist) {
           bestDist = d;
           bestMove = move;
+        }
+      }
+
+      // If no best move found (ghost in dead end), allow reverse as fallback
+      if (!bestMove) {
+        for (const move of moves) {
+          const nx = g.pos.x + move.x;
+          const ny = g.pos.y + move.y;
+          
+          // Bounds checking
+          if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS) continue;
+          if (isWall(nx, ny)) continue;
+          
+          // Found a valid move (including reverse)
+          return move;
         }
       }
 
@@ -303,6 +331,127 @@ const GameSandbox: FC = () => {
     },
     [gameReady, gameOver, won]
   );
+
+  // Calculate direction from joystick position
+  const calculateJoystickDirection = useCallback(
+    (stickX: number, stickY: number, centerX: number, centerY: number, radius: number) => {
+      const dx = stickX - centerX;
+      const dy = stickY - centerY;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      
+      // Normalize to radius
+      const normalizedX = distance > 0 ? dx / distance : 0;
+      const normalizedY = distance > 0 ? dy / distance : 0;
+      
+      // Determine primary direction (cardinal directions only)
+      const absX = Math.abs(normalizedX);
+      const absY = Math.abs(normalizedY);
+      
+      if (absX > absY) {
+        // Horizontal movement
+        return normalizedX > 0 ? { x: 1, y: 0 } : { x: -1, y: 0 };
+      } else if (absY > absX) {
+        // Vertical movement
+        return normalizedY > 0 ? { x: 0, y: 1 } : { x: 0, y: -1 };
+      }
+      
+      // Default to no movement
+      return { x: 0, y: 0 };
+    },
+    []
+  );
+
+  // Joystick touch handlers
+  const handleJoystickStart = useCallback(
+    (clientX: number, clientY: number) => {
+      if (!gameReady || gameOver || won) return;
+      
+      // Use touch position as center - allows touching anywhere on screen
+      const radius = 50; // Joystick radius in pixels
+      
+      joystickCenterRef.current = { x: clientX, y: clientY, radius };
+      setJoystickActive(true);
+      
+      // Initial touch sets center, no movement yet
+      setJoystickPosition({ x: 0, y: 0 });
+    },
+    [gameReady, gameOver, won]
+  );
+
+  const handleJoystickMove = useCallback(
+    (clientX: number, clientY: number) => {
+      if (!joystickActive || !joystickCenterRef.current) return;
+      
+      const { x: centerX, y: centerY, radius } = joystickCenterRef.current;
+      
+      // Calculate direction
+      const direction = calculateJoystickDirection(
+        clientX,
+        clientY,
+        centerX,
+        centerY,
+        radius
+      );
+      handleDirectionChange(direction);
+      
+      // Update joystick stick position (clamped to radius)
+      const dx = clientX - centerX;
+      const dy = clientY - centerY;
+      const distance = Math.min(Math.sqrt(dx * dx + dy * dy), radius);
+      const angle = Math.atan2(dy, dx);
+      
+      setJoystickPosition({
+        x: Math.cos(angle) * distance,
+        y: Math.sin(angle) * distance,
+      });
+    },
+    [joystickActive, calculateJoystickDirection, handleDirectionChange]
+  );
+
+  const handleJoystickEnd = useCallback(() => {
+    setJoystickActive(false);
+    setJoystickPosition({ x: 0, y: 0 });
+    joystickCenterRef.current = null;
+    handleDirectionChange({ x: 0, y: 0 }); // Stop movement
+  }, [handleDirectionChange]);
+
+  // Global touch handlers for joystick
+  useEffect(() => {
+    if (!isTouchDevice) return;
+
+    const handleTouchStart = (e: TouchEvent) => {
+      if (!gameReady || gameOver || won) return;
+      const touch = e.touches[0];
+      if (touch) {
+        handleJoystickStart(touch.clientX, touch.clientY);
+      }
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (!joystickActive) return;
+      e.preventDefault();
+      const touch = e.touches[0];
+      if (touch) {
+        handleJoystickMove(touch.clientX, touch.clientY);
+      }
+    };
+
+    const handleTouchEnd = () => {
+      handleJoystickEnd();
+    };
+
+    window.addEventListener('touchstart', handleTouchStart, { passive: false });
+    window.addEventListener('touchmove', handleTouchMove, { passive: false });
+    window.addEventListener('touchend', handleTouchEnd);
+    window.addEventListener('touchcancel', handleJoystickEnd);
+
+    return () => {
+      window.removeEventListener('touchstart', handleTouchStart);
+      window.removeEventListener('touchmove', handleTouchMove);
+      window.removeEventListener('touchend', handleTouchEnd);
+      window.removeEventListener('touchcancel', handleJoystickEnd);
+    };
+  }, [isTouchDevice, gameReady, gameOver, won, joystickActive, handleJoystickStart, handleJoystickMove, handleJoystickEnd]);
 
   // --- 1. Input Handling: Allows the player to control Pac-Man ---
   useEffect(() => {
@@ -435,8 +584,12 @@ const GameSandbox: FC = () => {
       });
 
       // --- GHOST Movement (Complex AI) ---
-      setGhosts((gs) =>
-        gs.map((g) => {
+      setGhosts((gs) => {
+        // Get Blinky's position for Inky's targeting
+        const blinky = gs.find((ghost) => ghost.id === "blinky");
+        const blinkyPos = blinky ? blinky.pos : { x: 0, y: 0 };
+
+        return gs.map((g) => {
           let targetPos: Pos;
           let currentMode: GhostMode = frightened ? "frightened" : ghostMode;
 
@@ -446,16 +599,50 @@ const GameSandbox: FC = () => {
           } else if (currentMode === "scatter") {
             targetPos = GHOST_SCATTER_POSITIONS[g.id];
           } else {
-            if (g.id === "pinky") {
-              targetPos = { x: pacman.x + dir.x * 4, y: pacman.y + dir.y * 4 };
+            // CHASE MODE - Each ghost has unique behavior
+            if (g.id === "blinky") {
+              // 👻 Blinky (Red/Shadow): Chases directly to Pac-Man
+              targetPos = pacman;
+            } else if (g.id === "pinky") {
+              // 👻 Pinky (Pink/Speedy): Tries to ambush by targeting 4 tiles ahead
+              const targetX = pacman.x + dir.x * 4;
+              const targetY = pacman.y + dir.y * 4;
+              // If Pac-Man is stationary, target directly ahead
+              if (dir.x === 0 && dir.y === 0) {
+                targetPos = pacman;
+              } else {
+                targetPos = { x: targetX, y: targetY };
+              }
+            } else if (g.id === "inky") {
+              // 👻 Inky (Cyan/Bashful): Unpredictable - uses Blinky's position as reference
+              // Calculate point 2 tiles ahead of Pac-Man
+              const aheadX = pacman.x + dir.x * 2;
+              const aheadY = pacman.y + dir.y * 2;
+              
+              // If Pac-Man is stationary, use current position
+              const aheadPos = dir.x === 0 && dir.y === 0 
+                ? pacman 
+                : { x: aheadX, y: aheadY };
+              
+              // Double the vector from Blinky to the ahead point
+              const vectorX = aheadPos.x - blinkyPos.x;
+              const vectorY = aheadPos.y - blinkyPos.y;
+              targetPos = {
+                x: aheadPos.x + vectorX,
+                y: aheadPos.y + vectorY,
+              };
             } else if (g.id === "clyde") {
+              // 👻 Clyde (Orange/Pokey): Acts random / retreats when close
               const distanceToPacman = Math.sqrt(distSq(g.pos, pacman));
               if (distanceToPacman < 8) {
+                // Retreat to scatter position when close
                 targetPos = GHOST_SCATTER_POSITIONS[g.id];
               } else {
+                // Chase directly when far
                 targetPos = pacman;
               }
             } else {
+              // Fallback: chase directly
               targetPos = pacman;
             }
           }
@@ -467,13 +654,51 @@ const GameSandbox: FC = () => {
             g.initialDir
           );
 
-          if (nextMove.x === 0 && nextMove.y === 0) return g;
+          // If no valid move found, try to find ANY valid move (safety fallback)
+          if (nextMove.x === 0 && nextMove.y === 0) {
+            const emergencyMoves: Dir[] = [
+              { x: 0, y: -1 },
+              { x: 0, y: 1 },
+              { x: -1, y: 0 },
+              { x: 1, y: 0 },
+            ];
+            
+            for (const move of emergencyMoves) {
+              const nx = g.pos.x + move.x;
+              const ny = g.pos.y + move.y;
+              if (nx >= 0 && nx < COLS && ny >= 0 && ny < ROWS && !isWall(nx, ny)) {
+                const newPos = { x: nx, y: ny };
+                return { ...g, pos: newPos, initialDir: move };
+              }
+            }
+            // If still no move, ghost stays in place but updates direction to allow future movement
+            return { ...g, initialDir: { x: 0, y: 0 } };
+          }
 
           const newPos = { x: g.pos.x + nextMove.x, y: g.pos.y + nextMove.y };
+          
+          // Safety check: ensure new position is valid
+          if (newPos.x < 0 || newPos.x >= COLS || newPos.y < 0 || newPos.y >= ROWS || isWall(newPos.x, newPos.y)) {
+            // Invalid position, try emergency moves
+            const emergencyMoves: Dir[] = [
+              { x: 0, y: -1 },
+              { x: 0, y: 1 },
+              { x: -1, y: 0 },
+              { x: 1, y: 0 },
+            ];
+            for (const move of emergencyMoves) {
+              const nx = g.pos.x + move.x;
+              const ny = g.pos.y + move.y;
+              if (nx >= 0 && nx < COLS && ny >= 0 && ny < ROWS && !isWall(nx, ny)) {
+                return { ...g, pos: { x: nx, y: ny }, initialDir: move };
+              }
+            }
+            return g; // Stay in place if truly stuck
+          }
 
           return { ...g, pos: newPos, initialDir: nextMove };
-        })
-      );
+        });
+      });
     }, TICK);
 
     return () => clearInterval(loop);
@@ -577,6 +802,70 @@ const GameSandbox: FC = () => {
         {frightened ? "Frightened" : ghostMode.toUpperCase()}
       </p>
 
+      {/* Ghost Mode Information
+      <div
+        style={{
+          margin: "12px auto",
+          padding: "12px",
+          background: "rgba(30, 58, 138, 0.3)",
+          borderRadius: "8px",
+          border: "1px solid rgba(250, 204, 21, 0.3)",
+          maxWidth: "500px",
+          fontSize: "12px",
+        }}
+      >
+        <div style={{ marginBottom: "8px", fontWeight: "bold", color: "#facc15" }}>
+          👻 Ghost Modes:
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "6px", textAlign: "left" }}>
+          <div
+            style={{
+              opacity: !frightened && ghostMode === "chase" ? 1 : 0.6,
+              fontWeight: !frightened && ghostMode === "chase" ? "bold" : "normal",
+              padding: !frightened && ghostMode === "chase" ? "4px" : "0",
+              background: !frightened && ghostMode === "chase" ? "rgba(250, 204, 21, 0.1)" : "transparent",
+              borderRadius: "4px",
+            }}
+          >
+            <span style={{ color: "#facc15" }}>1️⃣ Chase Mode:</span>{" "}
+            <span style={{ color: "#fff" }}>
+              They hunt Pac-Man using different logic
+              {!frightened && ghostMode === "chase" && " ⬅️ ACTIVE"}
+            </span>
+          </div>
+          <div
+            style={{
+              opacity: !frightened && ghostMode === "scatter" ? 1 : 0.6,
+              fontWeight: !frightened && ghostMode === "scatter" ? "bold" : "normal",
+              padding: !frightened && ghostMode === "scatter" ? "4px" : "0",
+              background: !frightened && ghostMode === "scatter" ? "rgba(250, 204, 21, 0.1)" : "transparent",
+              borderRadius: "4px",
+            }}
+          >
+            <span style={{ color: "#facc15" }}>2️⃣ Scatter Mode:</span>{" "}
+            <span style={{ color: "#fff" }}>
+              They retreat to their corners
+              {!frightened && ghostMode === "scatter" && " ⬅️ ACTIVE"}
+            </span>
+          </div>
+          <div
+            style={{
+              opacity: frightened ? 1 : 0.6,
+              fontWeight: frightened ? "bold" : "normal",
+              padding: frightened ? "4px" : "0",
+              background: frightened ? "rgba(96, 165, 250, 0.1)" : "transparent",
+              borderRadius: "4px",
+            }}
+          >
+            <span style={{ color: "#60a5fa" }}>3️⃣ Frightened Mode:</span>{" "}
+            <span style={{ color: "#fff" }}>
+              They turn blue and run away → Pac-Man can eat them 🟦😋
+              {frightened && " ⬅️ ACTIVE"}
+            </span>
+          </div>
+        </div>
+      </div> */}
+
       <div
         style={{
           display: "grid",
@@ -632,234 +921,62 @@ const GameSandbox: FC = () => {
         <p style={{ color: "red", fontWeight: "bold" }}>GAME OVER</p>
       )}
 
-      {/* Virtual D-pad for touch devices (tablet and mobile) */}
+      {/* Virtual Joystick for touch devices (tablet and mobile) */}
       {isTouchDevice && (
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "center",
-            alignItems: "center",
-            marginTop: "24px",
-            padding: "16px",
-            touchAction: "none",
-          }}
-        >
+        <>
+          {/* Visual Joystick Display (reference only) */}
           <div
             style={{
-              position: "relative",
-              width: "160px",
-              height: "160px",
+              display: "flex",
+              justifyContent: "center",
+              alignItems: "center",
+              marginTop: "24px",
+              padding: "16px",
+              touchAction: "none",
+              userSelect: "none",
+              WebkitUserSelect: "none",
+              pointerEvents: "none",
             }}
           >
-            {/* Up Button */}
-            <button
-              onTouchStart={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                handleDirectionChange({ x: 0, y: -1 });
-              }}
-              onTouchEnd={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-              }}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                handleDirectionChange({ x: 0, y: -1 });
-              }}
+            <div
+              ref={joystickBaseRef}
               style={{
-                position: "absolute",
-                top: "0",
-                left: "50%",
-                transform: "translateX(-50%)",
-                width: "56px",
-                height: "56px",
-                borderRadius: "12px",
-                border: "3px solid #facc15",
-                background: "rgba(250, 204, 21, 0.25)",
-                color: "#facc15",
-                fontSize: "28px",
-                fontWeight: "bold",
-                cursor: "pointer",
+                position: "relative",
+                width: "120px",
+                height: "120px",
+                borderRadius: "50%",
+                background: "rgba(250, 204, 21, 0.15)",
+                border: "3px solid rgba(250, 204, 21, 0.4)",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                userSelect: "none",
-                WebkitTapHighlightColor: "transparent",
-                WebkitUserSelect: "none",
-                transition: "background-color 0.1s ease, transform 0.1s ease",
-                boxShadow: "0 4px 12px rgba(250, 204, 21, 0.2)",
-              }}
-              onTouchStartCapture={(e) => {
-                const target = e.currentTarget as HTMLButtonElement;
-                target.style.background = "rgba(250, 204, 21, 0.5)";
-                target.style.transform = "translateX(-50%) scale(0.92)";
-              }}
-              onTouchEndCapture={(e) => {
-                const target = e.currentTarget as HTMLButtonElement;
-                target.style.background = "rgba(250, 204, 21, 0.25)";
-                target.style.transform = "translateX(-50%) scale(1)";
+                boxShadow: "0 4px 16px rgba(250, 204, 21, 0.2)",
+                opacity: joystickActive ? 0.8 : 0.5,
+                transition: "opacity 0.2s ease",
               }}
             >
-              ↑
-            </button>
-
-            {/* Left Button */}
-            <button
-              onTouchStart={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                handleDirectionChange({ x: -1, y: 0 });
-              }}
-              onTouchEnd={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-              }}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                handleDirectionChange({ x: -1, y: 0 });
-              }}
-              style={{
-                position: "absolute",
-                left: "0",
-                top: "50%",
-                transform: "translateY(-50%)",
-                width: "56px",
-                height: "56px",
-                borderRadius: "12px",
-                border: "3px solid #facc15",
-                background: "rgba(250, 204, 21, 0.25)",
-                color: "#facc15",
-                fontSize: "28px",
-                fontWeight: "bold",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                userSelect: "none",
-                WebkitTapHighlightColor: "transparent",
-                WebkitUserSelect: "none",
-                transition: "background-color 0.1s ease, transform 0.1s ease",
-                boxShadow: "0 4px 12px rgba(250, 204, 21, 0.2)",
-              }}
-              onTouchStartCapture={(e) => {
-                const target = e.currentTarget as HTMLButtonElement;
-                target.style.background = "rgba(250, 204, 21, 0.5)";
-                target.style.transform = "translateY(-50%) scale(0.92)";
-              }}
-              onTouchEndCapture={(e) => {
-                const target = e.currentTarget as HTMLButtonElement;
-                target.style.background = "rgba(250, 204, 21, 0.25)";
-                target.style.transform = "translateY(-50%) scale(1)";
-              }}
-            >
-              ←
-            </button>
-
-            {/* Down Button */}
-            <button
-              onTouchStart={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                handleDirectionChange({ x: 0, y: 1 });
-              }}
-              onTouchEnd={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-              }}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                handleDirectionChange({ x: 0, y: 1 });
-              }}
-              style={{
-                position: "absolute",
-                bottom: "0",
-                left: "50%",
-                transform: "translateX(-50%)",
-                width: "56px",
-                height: "56px",
-                borderRadius: "12px",
-                border: "3px solid #facc15",
-                background: "rgba(250, 204, 21, 0.25)",
-                color: "#facc15",
-                fontSize: "28px",
-                fontWeight: "bold",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                userSelect: "none",
-                WebkitTapHighlightColor: "transparent",
-                WebkitUserSelect: "none",
-                transition: "background-color 0.1s ease, transform 0.1s ease",
-                boxShadow: "0 4px 12px rgba(250, 204, 21, 0.2)",
-              }}
-              onTouchStartCapture={(e) => {
-                const target = e.currentTarget as HTMLButtonElement;
-                target.style.background = "rgba(250, 204, 21, 0.5)";
-                target.style.transform = "translateX(-50%) scale(0.92)";
-              }}
-              onTouchEndCapture={(e) => {
-                const target = e.currentTarget as HTMLButtonElement;
-                target.style.background = "rgba(250, 204, 21, 0.25)";
-                target.style.transform = "translateX(-50%) scale(1)";
-              }}
-            >
-              ↓
-            </button>
-
-            {/* Right Button */}
-            <button
-              onTouchStart={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                handleDirectionChange({ x: 1, y: 0 });
-              }}
-              onTouchEnd={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-              }}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                handleDirectionChange({ x: 1, y: 0 });
-              }}
-              style={{
-                position: "absolute",
-                right: "0",
-                top: "50%",
-                transform: "translateY(-50%)",
-                width: "56px",
-                height: "56px",
-                borderRadius: "12px",
-                border: "3px solid #facc15",
-                background: "rgba(250, 204, 21, 0.25)",
-                color: "#facc15",
-                fontSize: "28px",
-                fontWeight: "bold",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                userSelect: "none",
-                WebkitTapHighlightColor: "transparent",
-                WebkitUserSelect: "none",
-                transition: "background-color 0.1s ease, transform 0.1s ease",
-                boxShadow: "0 4px 12px rgba(250, 204, 21, 0.2)",
-              }}
-              onTouchStartCapture={(e) => {
-                const target = e.currentTarget as HTMLButtonElement;
-                target.style.background = "rgba(250, 204, 21, 0.5)";
-                target.style.transform = "translateY(-50%) scale(0.92)";
-              }}
-              onTouchEndCapture={(e) => {
-                const target = e.currentTarget as HTMLButtonElement;
-                target.style.background = "rgba(250, 204, 21, 0.25)";
-                target.style.transform = "translateY(-50%) scale(1)";
-              }}
-            >
-              →
-            </button>
+              {/* Joystick Stick */}
+              <div
+                ref={joystickStickRef}
+                style={{
+                  position: "absolute",
+                  width: "50px",
+                  height: "50px",
+                  borderRadius: "50%",
+                  background: joystickActive
+                    ? "rgba(250, 204, 21, 0.8)"
+                    : "rgba(250, 204, 21, 0.5)",
+                  border: "2px solid #facc15",
+                  transform: `translate(${joystickPosition.x}px, ${joystickPosition.y}px)`,
+                  transition: joystickActive ? "none" : "all 0.2s ease",
+                  boxShadow: joystickActive
+                    ? "0 2px 8px rgba(250, 204, 21, 0.4)"
+                    : "0 2px 4px rgba(250, 204, 21, 0.2)",
+                }}
+              />
+            </div>
           </div>
-        </div>
+        </>
       )}
     </div>
   );
