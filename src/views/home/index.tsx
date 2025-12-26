@@ -423,33 +423,47 @@ const GameSandbox: FC = () => {
       if (!gameReady || gameOver || won) return;
       const touch = e.touches[0];
       if (touch) {
+        // Only prevent default when we're actually using the joystick
+        e.preventDefault();
+        e.stopPropagation();
         handleJoystickStart(touch.clientX, touch.clientY);
       }
     };
 
     const handleTouchMove = (e: TouchEvent) => {
       if (!joystickActive) return;
+      // Always prevent default to stop scrolling
       e.preventDefault();
+      e.stopPropagation();
       const touch = e.touches[0];
       if (touch) {
         handleJoystickMove(touch.clientX, touch.clientY);
       }
     };
 
-    const handleTouchEnd = () => {
+    const handleTouchEnd = (e: TouchEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
       handleJoystickEnd();
     };
 
-    window.addEventListener('touchstart', handleTouchStart, { passive: false });
-    window.addEventListener('touchmove', handleTouchMove, { passive: false });
-    window.addEventListener('touchend', handleTouchEnd);
-    window.addEventListener('touchcancel', handleJoystickEnd);
+    const handleTouchCancel = (e: TouchEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      handleJoystickEnd();
+    };
+
+    // Use capture phase and passive: false to prevent scrolling
+    document.addEventListener('touchstart', handleTouchStart, { passive: false, capture: true });
+    document.addEventListener('touchmove', handleTouchMove, { passive: false, capture: true });
+    document.addEventListener('touchend', handleTouchEnd, { passive: false, capture: true });
+    document.addEventListener('touchcancel', handleTouchCancel, { passive: false, capture: true });
 
     return () => {
-      window.removeEventListener('touchstart', handleTouchStart);
-      window.removeEventListener('touchmove', handleTouchMove);
-      window.removeEventListener('touchend', handleTouchEnd);
-      window.removeEventListener('touchcancel', handleJoystickEnd);
+      document.removeEventListener('touchstart', handleTouchStart, { capture: true } as EventListenerOptions);
+      document.removeEventListener('touchmove', handleTouchMove, { capture: true } as EventListenerOptions);
+      document.removeEventListener('touchend', handleTouchEnd, { capture: true } as EventListenerOptions);
+      document.removeEventListener('touchcancel', handleTouchCancel, { capture: true } as EventListenerOptions);
     };
   }, [isTouchDevice, gameReady, gameOver, won, joystickActive, handleJoystickStart, handleJoystickMove, handleJoystickEnd]);
 
@@ -789,9 +803,41 @@ const GameSandbox: FC = () => {
   };
   const pacEmoji = mouth.current ? emojiMap[`${dir.x},${dir.y}`] || "🟡" : "🌕";
 
+  // Prevent body scroll when joystick is active
+  useEffect(() => {
+    if (!isTouchDevice) return;
+    
+    if (joystickActive) {
+      // Prevent scrolling
+      document.body.style.overflow = 'hidden';
+      document.body.style.position = 'fixed';
+      document.body.style.width = '100%';
+      document.body.style.height = '100%';
+    } else {
+      // Restore scrolling
+      document.body.style.overflow = '';
+      document.body.style.position = '';
+      document.body.style.width = '';
+      document.body.style.height = '';
+    }
+    
+    return () => {
+      // Cleanup on unmount
+      document.body.style.overflow = '';
+      document.body.style.position = '';
+      document.body.style.width = '';
+      document.body.style.height = '';
+    };
+  }, [isTouchDevice, joystickActive]);
+
   return (
     <div
-      style={{ color: "#facc15", textAlign: "center", fontFamily: "monospace" }}
+      style={{ 
+        color: "#facc15", 
+        textAlign: "center", 
+        fontFamily: "monospace",
+        touchAction: isTouchDevice ? "none" : "auto",
+      }}
     >
       <h2>PAC-MAN</h2>
       {!gameReady && !gameOver && !won && (
