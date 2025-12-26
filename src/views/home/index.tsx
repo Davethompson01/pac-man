@@ -240,6 +240,22 @@ const GameSandbox: FC = () => {
   const [frightened, setFrightened] = useState(false);
   const frightenedTimer = useRef<NodeJS.Timeout | null>(null);
 
+  // Touch device detection
+  const [isTouchDevice, setIsTouchDevice] = useState(false);
+
+  useEffect(() => {
+    // Detect touch devices
+    const checkTouchDevice = () => {
+      return (
+        'ontouchstart' in window ||
+        navigator.maxTouchPoints > 0 ||
+        // @ts-ignore - for older browsers
+        (navigator.msMaxTouchPoints && navigator.msMaxTouchPoints > 0)
+      );
+    };
+    setIsTouchDevice(checkTouchDevice());
+  }, []);
+
   // --- Utility Functions ---
 
   const distSq = (p1: Pos, p2: Pos) =>
@@ -256,19 +272,13 @@ const GameSandbox: FC = () => {
 
       let bestMove: Dir | null = null;
       let bestDist = g.mode === "frightened" ? -Infinity : Infinity;
-      
-      // If lastDir is stationary, allow all moves (no reverse prevention)
-      const preventReverse = lastDir.x !== 0 || lastDir.y !== 0;
 
       for (const move of moves) {
-        // Only prevent reverse if we have a valid last direction
-        if (preventReverse && move.x === -lastDir.x && move.y === -lastDir.y) continue;
+        if (move.x === -lastDir.x && move.y === -lastDir.y) continue;
 
         const nx = g.pos.x + move.x;
         const ny = g.pos.y + move.y;
 
-        // Bounds checking
-        if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS) continue;
         if (isWall(nx, ny)) continue;
 
         const newPos: Pos = { x: nx, y: ny };
@@ -280,20 +290,18 @@ const GameSandbox: FC = () => {
         }
       }
 
-      // If no best move found (e.g., ghost in dead end), fallback to any valid move (including reverse)
-      if (!bestMove) {
-        for (const move of moves) {
-          const nx = g.pos.x + move.x;
-          const ny = g.pos.y + move.y;
-          if (nx >= 0 && nx < COLS && ny >= 0 && ny < ROWS && !isWall(nx, ny)) {
-            return move;
-          }
-        }
-      }
-
       return bestMove || { x: 0, y: 0 };
     },
     [isWall, distSq]
+  );
+
+  // Unified direction handler (used by both keyboard and touch)
+  const handleDirectionChange = useCallback(
+    (newDir: Dir) => {
+      if (!gameReady || gameOver || won) return;
+      setDesiredDir(newDir);
+    },
+    [gameReady, gameOver, won]
   );
 
   // --- 1. Input Handling: Allows the player to control Pac-Man ---
@@ -302,14 +310,14 @@ const GameSandbox: FC = () => {
       // Only allow input when the game is ready
       if (!gameReady || gameOver || won) return;
 
-      if (e.key === "ArrowUp") setDesiredDir({ x: 0, y: -1 });
-      if (e.key === "ArrowDown") setDesiredDir({ x: 0, y: 1 });
-      if (e.key === "ArrowLeft") setDesiredDir({ x: -1, y: 0 });
-      if (e.key === "ArrowRight") setDesiredDir({ x: 1, y: 0 });
+      if (e.key === "ArrowUp") handleDirectionChange({ x: 0, y: -1 });
+      if (e.key === "ArrowDown") handleDirectionChange({ x: 0, y: 1 });
+      if (e.key === "ArrowLeft") handleDirectionChange({ x: -1, y: 0 });
+      if (e.key === "ArrowRight") handleDirectionChange({ x: 1, y: 0 });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [gameReady, gameOver, won]); // Dependent on game state
+  }, [gameReady, gameOver, won, handleDirectionChange]); // Dependent on game state
 
   // --- AUDIO INITIALIZATION & GAME READY DELAY ---
   useEffect(() => {
@@ -601,10 +609,11 @@ const GameSandbox: FC = () => {
               {pellets.has(key) && (
                 <span
                   style={{
-                    fontSize: MAZE[y][x] === "o" ? "20px" : "12px",
+                    fontSize: MAZE[y][x] === "o" ? "18px" : "10px",
+                    color: "#fde68a",
                   }}
                 >
-                  {MAZE[y][x] === "o" ? "🌟" : "⭐"}
+                  •
                 </span>
               )}
               {pacman.x === x && pacman.y === y && pacEmoji}
@@ -621,6 +630,236 @@ const GameSandbox: FC = () => {
       {won && <p style={{ color: "lime", fontWeight: "bold" }}>YOU WIN 🎉</p>}
       {gameOver && (
         <p style={{ color: "red", fontWeight: "bold" }}>GAME OVER</p>
+      )}
+
+      {/* Virtual D-pad for touch devices (tablet and mobile) */}
+      {isTouchDevice && (
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "center",
+            marginTop: "24px",
+            padding: "16px",
+            touchAction: "none",
+          }}
+        >
+          <div
+            style={{
+              position: "relative",
+              width: "160px",
+              height: "160px",
+            }}
+          >
+            {/* Up Button */}
+            <button
+              onTouchStart={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleDirectionChange({ x: 0, y: -1 });
+              }}
+              onTouchEnd={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                handleDirectionChange({ x: 0, y: -1 });
+              }}
+              style={{
+                position: "absolute",
+                top: "0",
+                left: "50%",
+                transform: "translateX(-50%)",
+                width: "56px",
+                height: "56px",
+                borderRadius: "12px",
+                border: "3px solid #facc15",
+                background: "rgba(250, 204, 21, 0.25)",
+                color: "#facc15",
+                fontSize: "28px",
+                fontWeight: "bold",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                userSelect: "none",
+                WebkitTapHighlightColor: "transparent",
+                WebkitUserSelect: "none",
+                transition: "background-color 0.1s ease, transform 0.1s ease",
+                boxShadow: "0 4px 12px rgba(250, 204, 21, 0.2)",
+              }}
+              onTouchStartCapture={(e) => {
+                const target = e.currentTarget as HTMLButtonElement;
+                target.style.background = "rgba(250, 204, 21, 0.5)";
+                target.style.transform = "translateX(-50%) scale(0.92)";
+              }}
+              onTouchEndCapture={(e) => {
+                const target = e.currentTarget as HTMLButtonElement;
+                target.style.background = "rgba(250, 204, 21, 0.25)";
+                target.style.transform = "translateX(-50%) scale(1)";
+              }}
+            >
+              ↑
+            </button>
+
+            {/* Left Button */}
+            <button
+              onTouchStart={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleDirectionChange({ x: -1, y: 0 });
+              }}
+              onTouchEnd={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                handleDirectionChange({ x: -1, y: 0 });
+              }}
+              style={{
+                position: "absolute",
+                left: "0",
+                top: "50%",
+                transform: "translateY(-50%)",
+                width: "56px",
+                height: "56px",
+                borderRadius: "12px",
+                border: "3px solid #facc15",
+                background: "rgba(250, 204, 21, 0.25)",
+                color: "#facc15",
+                fontSize: "28px",
+                fontWeight: "bold",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                userSelect: "none",
+                WebkitTapHighlightColor: "transparent",
+                WebkitUserSelect: "none",
+                transition: "background-color 0.1s ease, transform 0.1s ease",
+                boxShadow: "0 4px 12px rgba(250, 204, 21, 0.2)",
+              }}
+              onTouchStartCapture={(e) => {
+                const target = e.currentTarget as HTMLButtonElement;
+                target.style.background = "rgba(250, 204, 21, 0.5)";
+                target.style.transform = "translateY(-50%) scale(0.92)";
+              }}
+              onTouchEndCapture={(e) => {
+                const target = e.currentTarget as HTMLButtonElement;
+                target.style.background = "rgba(250, 204, 21, 0.25)";
+                target.style.transform = "translateY(-50%) scale(1)";
+              }}
+            >
+              ←
+            </button>
+
+            {/* Down Button */}
+            <button
+              onTouchStart={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleDirectionChange({ x: 0, y: 1 });
+              }}
+              onTouchEnd={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                handleDirectionChange({ x: 0, y: 1 });
+              }}
+              style={{
+                position: "absolute",
+                bottom: "0",
+                left: "50%",
+                transform: "translateX(-50%)",
+                width: "56px",
+                height: "56px",
+                borderRadius: "12px",
+                border: "3px solid #facc15",
+                background: "rgba(250, 204, 21, 0.25)",
+                color: "#facc15",
+                fontSize: "28px",
+                fontWeight: "bold",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                userSelect: "none",
+                WebkitTapHighlightColor: "transparent",
+                WebkitUserSelect: "none",
+                transition: "background-color 0.1s ease, transform 0.1s ease",
+                boxShadow: "0 4px 12px rgba(250, 204, 21, 0.2)",
+              }}
+              onTouchStartCapture={(e) => {
+                const target = e.currentTarget as HTMLButtonElement;
+                target.style.background = "rgba(250, 204, 21, 0.5)";
+                target.style.transform = "translateX(-50%) scale(0.92)";
+              }}
+              onTouchEndCapture={(e) => {
+                const target = e.currentTarget as HTMLButtonElement;
+                target.style.background = "rgba(250, 204, 21, 0.25)";
+                target.style.transform = "translateX(-50%) scale(1)";
+              }}
+            >
+              ↓
+            </button>
+
+            {/* Right Button */}
+            <button
+              onTouchStart={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleDirectionChange({ x: 1, y: 0 });
+              }}
+              onTouchEnd={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                handleDirectionChange({ x: 1, y: 0 });
+              }}
+              style={{
+                position: "absolute",
+                right: "0",
+                top: "50%",
+                transform: "translateY(-50%)",
+                width: "56px",
+                height: "56px",
+                borderRadius: "12px",
+                border: "3px solid #facc15",
+                background: "rgba(250, 204, 21, 0.25)",
+                color: "#facc15",
+                fontSize: "28px",
+                fontWeight: "bold",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                userSelect: "none",
+                WebkitTapHighlightColor: "transparent",
+                WebkitUserSelect: "none",
+                transition: "background-color 0.1s ease, transform 0.1s ease",
+                boxShadow: "0 4px 12px rgba(250, 204, 21, 0.2)",
+              }}
+              onTouchStartCapture={(e) => {
+                const target = e.currentTarget as HTMLButtonElement;
+                target.style.background = "rgba(250, 204, 21, 0.5)";
+                target.style.transform = "translateY(-50%) scale(0.92)";
+              }}
+              onTouchEndCapture={(e) => {
+                const target = e.currentTarget as HTMLButtonElement;
+                target.style.background = "rgba(250, 204, 21, 0.25)";
+                target.style.transform = "translateY(-50%) scale(1)";
+              }}
+            >
+              →
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );
