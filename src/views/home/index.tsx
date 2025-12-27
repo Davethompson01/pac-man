@@ -243,12 +243,10 @@ const GameSandbox: FC = () => {
   // Touch device detection
   const [isTouchDevice, setIsTouchDevice] = useState(false);
 
-  // Joystick state
-  const [joystickActive, setJoystickActive] = useState(false);
-  const [joystickPosition, setJoystickPosition] = useState({ x: 0, y: 0 });
-  const joystickBaseRef = useRef<HTMLDivElement>(null);
-  const joystickStickRef = useRef<HTMLDivElement>(null);
-  const joystickCenterRef = useRef<{ x: number; y: number; radius: number } | null>(null);
+  // Swipe detection state
+  const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
+  const SWIPE_THRESHOLD = 30; // Minimum distance in pixels for a swipe
+  const SWIPE_TIME_THRESHOLD = 300; // Maximum time in ms for a swipe
 
   useEffect(() => {
     // Detect touch devices
@@ -279,7 +277,7 @@ const GameSandbox: FC = () => {
 
       let bestMove: Dir | null = null;
       let bestDist = g.mode === "frightened" ? -Infinity : Infinity;
-      
+
       // Only prevent reverse if we have a valid last direction (not stationary)
       const preventReverse = lastDir.x !== 0 || lastDir.y !== 0;
 
@@ -332,98 +330,58 @@ const GameSandbox: FC = () => {
     [gameReady, gameOver, won]
   );
 
-  // Calculate direction from joystick position
-  const calculateJoystickDirection = useCallback(
-    (stickX: number, stickY: number, centerX: number, centerY: number, radius: number) => {
-      const dx = stickX - centerX;
-      const dy = stickY - centerY;
-      const distance = Math.sqrt(dx * dx + dy * dy);
-      
-      // Minimum threshold to register movement (prevents accidental touches)
-      const minThreshold = 15; // pixels
-      if (distance < minThreshold) {
-        return { x: 0, y: 0 };
-      }
-      
-      // Normalize to radius
-      const normalizedX = distance > 0 ? dx / distance : 0;
-      const normalizedY = distance > 0 ? dy / distance : 0;
-      
-      // Determine primary direction (cardinal directions only)
-      const absX = Math.abs(normalizedX);
-      const absY = Math.abs(normalizedY);
-      
-      if (absX > absY) {
-        // Horizontal movement
-        return normalizedX > 0 ? { x: 1, y: 0 } : { x: -1, y: 0 };
-      } else if (absY > absX) {
-        // Vertical movement
-        return normalizedY > 0 ? { x: 0, y: 1 } : { x: 0, y: -1 };
-      }
-      
-      // Default to no movement
-      return { x: 0, y: 0 };
-    },
-    []
-  );
-
-  // Joystick touch handlers
-  const handleJoystickStart = useCallback(
+  // Swipe gesture handlers
+  const handleSwipeStart = useCallback(
     (clientX: number, clientY: number) => {
       if (!gameReady || gameOver || won) return;
-      
-      // Use touch position as center - allows touching anywhere on screen
-      const radius = 50; // Joystick radius in pixels
-      
-      joystickCenterRef.current = { x: clientX, y: clientY, radius };
-      setJoystickActive(true);
-      
-      // Initial touch sets center, no movement yet
-      setJoystickPosition({ x: 0, y: 0 });
+      touchStartRef.current = {
+        x: clientX,
+        y: clientY,
+        time: Date.now(),
+      };
     },
     [gameReady, gameOver, won]
   );
 
-  const handleJoystickMove = useCallback(
+  const handleSwipeEnd = useCallback(
     (clientX: number, clientY: number) => {
-      if (!joystickActive || !joystickCenterRef.current) return;
-      
-      const { x: centerX, y: centerY, radius } = joystickCenterRef.current;
-      
-      // Calculate direction
-      const direction = calculateJoystickDirection(
-        clientX,
-        clientY,
-        centerX,
-        centerY,
-        radius
-      );
-      
-      // Update direction immediately (this is critical for game control)
+      if (!touchStartRef.current) return;
+
+      const { x: startX, y: startY, time: startTime } = touchStartRef.current;
+      const dx = clientX - startX;
+      const dy = clientY - startY;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      const timeElapsed = Date.now() - startTime;
+
+      // Reset touch start
+      touchStartRef.current = null;
+
+      // Check if it's a valid swipe (enough distance and fast enough)
+      if (distance < SWIPE_THRESHOLD || timeElapsed > SWIPE_TIME_THRESHOLD) {
+        return;
+      }
+
+      // Determine swipe direction
+      const absX = Math.abs(dx);
+      const absY = Math.abs(dy);
+
+      let direction: Dir = { x: 0, y: 0 };
+
+      if (absX > absY) {
+        // Horizontal swipe
+        direction = dx > 0 ? { x: 1, y: 0 } : { x: -1, y: 0 };
+      } else {
+        // Vertical swipe
+        direction = dy > 0 ? { x: 0, y: 1 } : { x: 0, y: -1 };
+      }
+
+      // Update Pac-Man direction
       handleDirectionChange(direction);
-      
-      // Update joystick stick position (clamped to radius)
-      const dx = clientX - centerX;
-      const dy = clientY - centerY;
-      const distance = Math.min(Math.sqrt(dx * dx + dy * dy), radius);
-      const angle = Math.atan2(dy, dx);
-      
-      setJoystickPosition({
-        x: Math.cos(angle) * distance,
-        y: Math.sin(angle) * distance,
-      });
     },
-    [joystickActive, calculateJoystickDirection, handleDirectionChange]
+    [handleDirectionChange]
   );
 
-  const handleJoystickEnd = useCallback(() => {
-    setJoystickActive(false);
-    setJoystickPosition({ x: 0, y: 0 });
-    joystickCenterRef.current = null;
-    handleDirectionChange({ x: 0, y: 0 }); // Stop movement
-  }, [handleDirectionChange]);
-
-  // Global touch handlers for joystick
+  // Global touch handlers for swipe gestures
   useEffect(() => {
     if (!isTouchDevice) return;
 
@@ -431,52 +389,33 @@ const GameSandbox: FC = () => {
       if (!gameReady || gameOver || won) return;
       const touch = e.touches[0];
       if (touch) {
-        // Prevent default to stop scrolling
         e.preventDefault();
-        handleJoystickStart(touch.clientX, touch.clientY);
-      }
-    };
-
-    const handleTouchMove = (e: TouchEvent) => {
-      if (!joystickActive) {
-        // Don't prevent default if joystick isn't active
-        return;
-      }
-      // Prevent scrolling only when joystick is active
-      e.preventDefault();
-      const touch = e.touches[0];
-      if (touch) {
-        handleJoystickMove(touch.clientX, touch.clientY);
+        handleSwipeStart(touch.clientX, touch.clientY);
       }
     };
 
     const handleTouchEnd = (e: TouchEvent) => {
-      if (joystickActive) {
+      const touch = e.changedTouches[0];
+      if (touch && touchStartRef.current) {
         e.preventDefault();
-        handleJoystickEnd();
+        handleSwipeEnd(touch.clientX, touch.clientY);
       }
     };
 
     const handleTouchCancel = (e: TouchEvent) => {
-      if (joystickActive) {
-        e.preventDefault();
-        handleJoystickEnd();
-      }
+      touchStartRef.current = null;
     };
 
-    // Use passive: false to allow preventDefault, but don't use capture
     window.addEventListener('touchstart', handleTouchStart, { passive: false });
-    window.addEventListener('touchmove', handleTouchMove, { passive: false });
     window.addEventListener('touchend', handleTouchEnd, { passive: false });
     window.addEventListener('touchcancel', handleTouchCancel, { passive: false });
 
     return () => {
       window.removeEventListener('touchstart', handleTouchStart);
-      window.removeEventListener('touchmove', handleTouchMove);
       window.removeEventListener('touchend', handleTouchEnd);
       window.removeEventListener('touchcancel', handleTouchCancel);
     };
-  }, [isTouchDevice, gameReady, gameOver, won, joystickActive, handleJoystickStart, handleJoystickMove, handleJoystickEnd]);
+  }, [isTouchDevice, gameReady, gameOver, won, handleSwipeStart, handleSwipeEnd]);
 
   // --- 1. Input Handling: Allows the player to control Pac-Man ---
   useEffect(() => {
@@ -814,20 +753,6 @@ const GameSandbox: FC = () => {
   };
   const pacEmoji = mouth.current ? emojiMap[`${dir.x},${dir.y}`] || "🟡" : "🌕";
 
-  // Prevent body scroll when joystick is active (simpler approach)
-  useEffect(() => {
-    if (!isTouchDevice) return;
-    
-    if (joystickActive) {
-      // Prevent scrolling with CSS
-      const originalOverflow = document.body.style.overflow;
-      document.body.style.overflow = 'hidden';
-      
-      return () => {
-        document.body.style.overflow = originalOverflow;
-      };
-    }
-  }, [isTouchDevice, joystickActive]);
 
   return (
     <div
@@ -964,64 +889,6 @@ const GameSandbox: FC = () => {
       {won && <p style={{ color: "lime", fontWeight: "bold" }}>YOU WIN 🎉</p>}
       {gameOver && (
         <p style={{ color: "red", fontWeight: "bold" }}>GAME OVER</p>
-      )}
-
-      {/* Virtual Joystick for touch devices (tablet and mobile) */}
-      {isTouchDevice && (
-        <>
-          {/* Visual Joystick Display (reference only) */}
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "center",
-              alignItems: "center",
-              marginTop: "24px",
-              padding: "16px",
-              touchAction: "none",
-              userSelect: "none",
-              WebkitUserSelect: "none",
-              pointerEvents: "none",
-            }}
-          >
-            <div
-              ref={joystickBaseRef}
-              style={{
-                position: "relative",
-                width: "120px",
-                height: "120px",
-                borderRadius: "50%",
-                background: "rgba(250, 204, 21, 0.15)",
-                border: "3px solid rgba(250, 204, 21, 0.4)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                boxShadow: "0 4px 16px rgba(250, 204, 21, 0.2)",
-                opacity: joystickActive ? 0.8 : 0.5,
-                transition: "opacity 0.2s ease",
-              }}
-            >
-              {/* Joystick Stick */}
-              <div
-                ref={joystickStickRef}
-                style={{
-                  position: "absolute",
-                  width: "50px",
-                  height: "50px",
-                  borderRadius: "50%",
-                  background: joystickActive
-                    ? "rgba(250, 204, 21, 0.8)"
-                    : "rgba(250, 204, 21, 0.5)",
-                  border: "2px solid #facc15",
-                  transform: `translate(${joystickPosition.x}px, ${joystickPosition.y}px)`,
-                  transition: joystickActive ? "none" : "all 0.2s ease",
-                  boxShadow: joystickActive
-                    ? "0 2px 8px rgba(250, 204, 21, 0.4)"
-                    : "0 2px 4px rgba(250, 204, 21, 0.2)",
-                }}
-              />
-            </div>
-          </div>
-        </>
       )}
     </div>
   );
