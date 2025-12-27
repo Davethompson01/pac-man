@@ -409,7 +409,7 @@ const GameSandbox: FC = () => {
     setTimeout(() => {
       setGameReady(true);
     }, 500);
-  }, []);
+  }, [MAZE]);
 
   // Swipe gesture handlers
   const handleSwipeStart = useCallback(
@@ -774,6 +774,7 @@ const GameSandbox: FC = () => {
     getNextGhostMove,
     ghostMode,
     frightened,
+    MAZE,
   ]);
 
   // 4. Collision Handling
@@ -1223,7 +1224,7 @@ const GameSandbox: FC = () => {
                 margin: "10px 0",
               }}
             >
-              ⚡ You've mastered the maze! ⚡
+              ⚡ You&apos;ve mastered the maze! ⚡
             </p>
             <button
               onClick={restartGame}
