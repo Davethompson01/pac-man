@@ -151,8 +151,8 @@ const GameSandbox: FC = () => {
   const MAZE = [
     "###############",
     "#.............#",
-    "#.###.###.###..#",
-    "#o###.###.###o.#",
+    "#.###.###.###.#",
+    "#o###.###.###o#",
     "#.............#",
     "#.###.#.#.###.#",
     "#.....#.#.....#",
@@ -160,7 +160,7 @@ const GameSandbox: FC = () => {
     "#.....#.#.....#",
     "#.###.#.#.###.#",
     "#.............#",
-    "#.###.###.###..#",
+    "#.###.###.###.#",
     "#o...........o#",
     "#.............#",
     "###############",
@@ -196,7 +196,9 @@ const GameSandbox: FC = () => {
       new Set(
         MAZE.flatMap((row, y) =>
           row.split("").reduce((acc: string[], char, x) => {
-            if (char === "." || char === "o") {
+            // Only add pellets that are within grid bounds (COLS = 15, so x must be 0-14)
+            // and the character must be a pellet (not a wall)
+            if ((char === "." || char === "o") && x < COLS && y < ROWS) {
               acc.push(`${x},${y}`);
             }
             return acc;
@@ -204,6 +206,9 @@ const GameSandbox: FC = () => {
         )
       )
   );
+  
+  // Ref to track pellets for win condition check in game loop (avoids stale closure)
+  const pelletsRef = useRef(pellets);
 
   const [ghosts, setGhosts] = useState<Ghost[]>([
     {
@@ -355,12 +360,13 @@ const GameSandbox: FC = () => {
     ghostEatenCount.current = 0;
     trailPositions.current = [];
     
-    // Reset pellets
+    // Reset pellets with proper validation
     setPellets(
       new Set(
         MAZE.flatMap((row, y) =>
           row.split("").reduce((acc: string[], char, x) => {
-            if (char === "." || char === "o") {
+            // Only add pellets that are within grid bounds and valid
+            if ((char === "." || char === "o") && x < COLS && y < ROWS) {
               acc.push(`${x},${y}`);
             }
             return acc;
@@ -584,11 +590,25 @@ const GameSandbox: FC = () => {
     }
   }, [frightened]);
 
+  // Sync pellets ref with state
+  useEffect(() => {
+    pelletsRef.current = pellets;
+  }, [pellets]);
+
   // 3. Main Game Loop
   useEffect(() => {
-    if (!gameReady || gameOver || won || paused) return;
+    if (!gameReady || gameOver || won) return;
 
     const loop = setInterval(() => {
+      // Check win condition at the start of each loop iteration using ref for latest value
+      if (pelletsRef.current.size === 0) {
+        setWon(true);
+        setGameReady(false);
+        stopSound("siren");
+        clearInterval(loop);
+        return;
+      }
+
       mouth.current = !mouth.current;
       pulsePhase.current = (pulsePhase.current + 0.2) % (Math.PI * 2);
       
@@ -599,6 +619,8 @@ const GameSandbox: FC = () => {
       ];
 
       // --- PACMAN Movement and Pellet Eating ---
+      // Only move Pac-Man if not paused
+      if (!paused) {
       setPacman((p) => {
         const tryX = p.x + desiredDir.x;
         const tryY = p.y + desiredDir.y;
@@ -625,11 +647,26 @@ const GameSandbox: FC = () => {
 
         const key = `${nx},${ny}`;
         if (pellets.has(key)) {
+          // Check if this is the last pellet BEFORE deleting
+          const isLastPellet = pellets.size === 1;
+          
           setPellets((prev) => {
+            if (!prev.has(key)) return prev;
+            
             const n = new Set(prev);
             n.delete(key);
+            // Update ref immediately for win condition check in next loop iteration
+            pelletsRef.current = n;
             return n;
           });
+
+          // Handle win condition immediately when last pellet is collected
+          if (isLastPellet) {
+            // Set win state immediately
+            setWon(true);
+            setGameReady(false); // Stop the game immediately
+            stopSound("siren");
+          }
 
           if (MAZE[ny][nx] === "o") {
             setScore((s) => s + 50);
@@ -641,6 +678,7 @@ const GameSandbox: FC = () => {
         }
         return { x: nx, y: ny };
       });
+      }
 
       // --- GHOST Movement (Complex AI) ---
       setGhosts((gs) => {
@@ -834,10 +872,15 @@ const GameSandbox: FC = () => {
     });
   }, [pacman, ghosts, frightened, gameReady]);
 
-  // 5. Win condition
+  // 5. Win condition (backup check - runs after state updates)
   useEffect(() => {
-    if (pellets.size === 0) setWon(true);
-  }, [pellets]);
+    if (pellets.size === 0 && gameReady && !gameOver && !won) {
+      // Immediately set win state
+      setWon(true);
+      setGameReady(false); // Stop the game immediately
+      stopSound("siren");
+    }
+  }, [pellets.size, gameReady, gameOver, won]);
 
   // --- Rendering ---
 
@@ -1029,7 +1072,12 @@ const GameSandbox: FC = () => {
       )}
       <p>
         Score: {score} | Lives: {lives} | Mode:{" "}
-        {frightened ? "Frightened" : ghostMode.toUpperCase()}
+        {frightened ? "Frightened" : ghostMode.toUpperCase()} | Pellets: {pellets.size}
+        {pellets.size > 0 && pellets.size <= 5 && (
+          <span style={{ color: "#fbbf24", marginLeft: "10px" }}>
+            (Positions: {Array.from(pellets).join(", ")})
+          </span>
+        )}
       </p>
 
       {/* Ghost Mode Information
@@ -1137,11 +1185,14 @@ const GameSandbox: FC = () => {
                 return null;
               })}
               
-              {pellets.has(key) && (
+              {pellets.has(key) && !isWall(x, y) && (
                 <span
                   style={{
-                    fontSize: MAZE[y][x] === "o" ? "18px" : "10px",
+                    fontSize: MAZE[y] && MAZE[y][x] === "o" ? "18px" : "10px",
                     color: "#fde68a",
+                    position: "relative",
+                    zIndex: 2,
+                    pointerEvents: "none",
                   }}
                 >
                   •
@@ -1175,12 +1226,13 @@ const GameSandbox: FC = () => {
             left: 0,
             right: 0,
             bottom: 0,
-            background: "rgba(0, 0, 0, 0.85)",
+            background: "rgba(0, 0, 0, 0.9)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            zIndex: 1000,
+            zIndex: 9999,
             backdropFilter: "blur(5px)",
+            pointerEvents: "auto",
           }}
         >
           <div
@@ -1345,7 +1397,7 @@ const GameSandbox: FC = () => {
           </div>
         </div>
       )}
-      </div>
+    </div>
     </>
   );
 };
